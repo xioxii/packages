@@ -1,0 +1,109 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006-2011 OpenWrt.org
+
+START=50
+STOP=50
+
+USE_PROCD=1
+PROG=/usr/sbin/sshd
+
+start_service() {
+	# MT6890_R12_6_SSHD_STEP_TRACE
+	echo "R12.6:SSHD:ENTER:pid=$$" > /dev/kmsg 2>/dev/null || true
+	for type in rsa ed25519
+	do
+		# check for keys
+		key=/etc/ssh/ssh_host_${type}_key
+		if [ -f "$key" ]; then
+			echo "R12.6:SSHD:KEY-STATE:type=$type:exists=1:size=$(wc -c < "$key" 2>/dev/null)" > /dev/kmsg 2>/dev/null || true
+		else
+			echo "R12.6:SSHD:KEY-STATE:type=$type:exists=0" > /dev/kmsg 2>/dev/null || true
+		fi
+		[ ! -f $key ] && {
+			# generate missing keys
+			[ -x /usr/bin/ssh-keygen ] && {
+				echo "R12.6:SSHD:KEYGEN-BEGIN:type=$type" > /dev/kmsg 2>/dev/null || true
+				# MT6890_R12_7_RSA_KEYGEN_PROC_TRACE
+				/usr/bin/ssh-keygen -N '' -t $type -f $key 2>&- >&- &
+				__r12_7_pid=$!
+				echo "R12.7:RSA:PID:$__r12_7_pid:type=$type" > /dev/kmsg 2>/dev/null || true
+				(
+					__r12_7_n=0
+					while [ $__r12_7_n -lt 20 ] && [ -d /proc/$__r12_7_pid ]; do
+						__r12_7_n=$((__r12_7_n + 1))
+						__r12_7_state=$(awk '/^State:/ {print $2}' /proc/$__r12_7_pid/status 2>/dev/null)
+						__r12_7_stat=$(cat /proc/$__r12_7_pid/stat 2>/dev/null)
+						__r12_7_utime=$(echo "$__r12_7_stat" | awk '{print $14}')
+						__r12_7_stime=$(echo "$__r12_7_stat" | awk '{print $15}')
+						__r12_7_wchan=$(cat /proc/$__r12_7_pid/wchan 2>/dev/null)
+						echo "R12.7:RSA:SAMPLE:n=$__r12_7_n:pid=$__r12_7_pid:state=${__r12_7_state:-?}:utime=${__r12_7_utime:-?}:stime=${__r12_7_stime:-?}:wchan=${__r12_7_wchan:-?}" > /dev/kmsg 2>/dev/null || true
+						if [ -r /proc/$__r12_7_pid/syscall ]; then
+							__r12_7_syscall=$(cat /proc/$__r12_7_pid/syscall 2>/dev/null)
+							echo "R12.7:RSA:SYSCALL:n=$__r12_7_n:$__r12_7_syscall" > /dev/kmsg 2>/dev/null || true
+						fi
+						if [ $__r12_7_n -le 3 ] && [ -r /proc/$__r12_7_pid/stack ]; then
+							while IFS= read -r __r12_7_stack; do
+								echo "R12.7:RSA:STACK:n=$__r12_7_n:$__r12_7_stack" > /dev/kmsg 2>/dev/null || true
+							done < /proc/$__r12_7_pid/stack
+						fi
+						sleep 1
+					done
+				) &
+				__r12_7_mon=$!
+				wait $__r12_7_pid
+				__r12_6_rc=$?
+				kill $__r12_7_mon 2>/dev/null || true
+				wait $__r12_7_mon 2>/dev/null || true
+				echo "R12.6:SSHD:KEYGEN-END:type=$type:rc=$__r12_6_rc" > /dev/kmsg 2>/dev/null || true
+				( exit "$__r12_6_rc" )
+			}
+		}
+	done
+	echo "R12.6:SSHD:MKDIR-BEGIN" > /dev/kmsg 2>/dev/null || true
+	mkdir -m 0700 -p /var/empty
+	__r12_6_rc=$?
+	echo "R12.6:SSHD:MKDIR-END:rc=$__r12_6_rc" > /dev/kmsg 2>/dev/null || true
+	( exit "$__r12_6_rc" )
+
+	echo "R12.6:SSHD:LPORT-BEGIN" > /dev/kmsg 2>/dev/null || true
+	local lport=$(awk '/^Port / { print $2; exit }' /etc/ssh/sshd_config)
+	__r12_6_rc=$?
+	echo "R12.6:SSHD:LPORT-END:rc=$__r12_6_rc:lport=${lport:-}" > /dev/kmsg 2>/dev/null || true
+	( exit "$__r12_6_rc" )
+	[ -z "$lport" ] && lport=22
+
+	echo "R12.6:SSHD:PROCD-OPEN-BEGIN" > /dev/kmsg 2>/dev/null || true
+	procd_open_instance
+	__r12_6_rc=$?
+	echo "R12.6:SSHD:PROCD-OPEN-END:rc=$__r12_6_rc" > /dev/kmsg 2>/dev/null || true
+	( exit "$__r12_6_rc" )
+	echo "R12.6:SSHD:PROCD-MDNS-BEGIN:lport=$lport" > /dev/kmsg 2>/dev/null || true
+	procd_add_mdns "ssh" "tcp" "$lport"
+	__r12_6_rc=$?
+	echo "R12.6:SSHD:PROCD-MDNS-END:rc=$__r12_6_rc" > /dev/kmsg 2>/dev/null || true
+	( exit "$__r12_6_rc" )
+	echo "R12.6:SSHD:PROCD-CMD-BEGIN:prog=$PROG" > /dev/kmsg 2>/dev/null || true
+	procd_set_param command $PROG -D
+	__r12_6_rc=$?
+	echo "R12.6:SSHD:PROCD-CMD-END:rc=$__r12_6_rc" > /dev/kmsg 2>/dev/null || true
+	( exit "$__r12_6_rc" )
+	echo "R12.6:SSHD:PROCD-CLOSE-BEGIN" > /dev/kmsg 2>/dev/null || true
+	procd_close_instance
+	__r12_6_rc=$?
+	echo "R12.6:SSHD:PROCD-CLOSE-END:rc=$__r12_6_rc" > /dev/kmsg 2>/dev/null || true
+	( exit "$__r12_6_rc" )
+	echo "R12.6:SSHD:LEAVE:pid=$$" > /dev/kmsg 2>/dev/null || true
+}
+
+shutdown() {
+	local pid
+
+	stop
+
+	# kill active clients
+	for pid in $(pidof sshd)
+	do
+		[ "$pid" = "$$" ] && continue
+		[ -e "/proc/$pid/stat" ] && kill $pid
+	done
+}
